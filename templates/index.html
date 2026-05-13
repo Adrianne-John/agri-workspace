@@ -50,7 +50,7 @@
   <div class="panel move-panel">
     <div class="panel-title">
       Movement Control
-      <span class="gpio-tag">ESC GPIO 18</span>
+      <span class="gpio-tag">ESC GPIO 18 &nbsp;|&nbsp; Steer GPIO 12</span>
     </div>
     <div class="move-body">
 
@@ -114,26 +114,53 @@
     <div class="panel-title">Camera &amp; Laser Controls</div>
     <div class="ctrl-body">
 
-      <!-- Camera Pan -->
-      <div class="servo-block">
-        <div class="servo-label">
-          Camera Pan <span class="gpio-tag">GPIO 19</span>
-          <span id="s1val">0°</span>
+      <!-- Camera pan + tilt side by side -->
+      <div class="cam-axes">
+
+        <!-- Pan (left / right) -->
+        <div class="servo-block">
+          <div class="servo-label">
+            Pan &nbsp;<span class="gpio-tag">GPIO 19</span>
+            <span id="s1val">0°</span>
+          </div>
+          <input type="range" id="s1" min="-90" max="90" value="0"
+                 oninput="liveLabel('s1','s1val')"
+                 onchange="moveServo('servo1', this.value, false)">
+          <div class="servo-btns">
+            <button class="btn-sm" onclick="setServo('servo1','s1',-90)">Full L</button>
+            <button class="btn-sm" onclick="setServo('servo1','s1',-45)">Left</button>
+            <button class="btn-sm" onclick="setServo('servo1','s1',0)">Centre</button>
+            <button class="btn-sm" onclick="setServo('servo1','s1',45)">Right</button>
+            <button class="btn-sm" onclick="setServo('servo1','s1',90)">Full R</button>
+          </div>
+          <div class="smooth-row">
+            <input type="checkbox" id="smooth1">
+            <label for="smooth1">Smooth</label>
+          </div>
         </div>
-        <input type="range" id="s1" min="-90" max="90" value="0"
-               oninput="liveLabel('s1','s1val')"
-               onchange="moveServo('servo1', this.value, false)">
-        <div class="servo-btns">
-          <button class="btn-sm" onclick="setServo('servo1','s1',-90)">Full L</button>
-          <button class="btn-sm" onclick="setServo('servo1','s1',-45)">Left</button>
-          <button class="btn-sm" onclick="setServo('servo1','s1',0)">Center</button>
-          <button class="btn-sm" onclick="setServo('servo1','s1',45)">Right</button>
-          <button class="btn-sm" onclick="setServo('servo1','s1',90)">Full R</button>
+
+        <!-- Tilt (up / down) -->
+        <div class="servo-block">
+          <div class="servo-label">
+            Tilt &nbsp;<span class="gpio-tag">GPIO 13</span>
+            <span id="s2val">0°</span>
+          </div>
+          <input type="range" id="s2" min="-90" max="90" value="0"
+                 oninput="liveLabel('s2','s2val')"
+                 onchange="moveServo('servo2', this.value, false)">
+          <div class="servo-btns">
+            <button class="btn-sm" onclick="setServo('servo2','s2',-90)">Full U</button>
+            <button class="btn-sm" onclick="setServo('servo2','s2',-45)">Up</button>
+            <button class="btn-sm" onclick="setServo('servo2','s2',0)">Centre</button>
+            <button class="btn-sm" onclick="setServo('servo2','s2',45)">Down</button>
+            <button class="btn-sm" onclick="setServo('servo2','s2',90)">Full D</button>
+          </div>
+          <div class="smooth-row">
+            <input type="checkbox" id="smooth2">
+            <label for="smooth2">Smooth</label>
+          </div>
         </div>
-        <div class="smooth-row">
-          <input type="checkbox" id="smooth1">
-          <label for="smooth1">Smooth move for presets</label>
-        </div>
+
       </div>
 
       <hr class="divider">

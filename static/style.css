@@ -100,6 +100,14 @@ input[type=range]::-webkit-slider-thumb {
 }
 .smooth-row input[type=checkbox] { accent-color: #4299e1; }
 
+/* Camera pan + tilt axes */
+.cam-axes {
+  display: flex; gap: 20px; flex-wrap: wrap;
+}
+.cam-axes .servo-block {
+  flex: 1; min-width: 180px;
+}
+
 /* Laser */
 .laser-block {
   display: flex; align-items: center;

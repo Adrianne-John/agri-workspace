@@ -3,19 +3,25 @@ import time
 import threading
 
 # ── Hardware PWM via sysfs ────────────────────────────────────────────────────
-# GPIO 18 → QuicRun 1060 ESC signal wire  (pwmchip0 / pwm2 = PWM0_CHAN2)
-# GPIO 19 → freed for camera pan servo (RPi.GPIO software PWM in agribot.py)
+# All three devices use pwmchip0 (RP1 PWM0 block), confirmed via pinctrl:
 #
-# config.txt overlay: dtoverlay=pwm,pin=18,func=2
-#   (single channel — GPIO 19 is NOT claimed by the PWM overlay)
+#   GPIO 12  →  PWM0_CHAN0  →  pwmchip0/pwm0   JX PDI-6621 steering servo
+#   GPIO 18  →  PWM0_CHAN2  →  pwmchip0/pwm2   QuicRun 1060 ESC
+#   GPIO 19  →  PWM0_CHAN3  →  pwmchip0/pwm3   MG90S camera pan (agribot.py)
+#
+# config.txt overlays:
+#   dtoverlay=pwm,pin=12,func=4
+#   dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
 #
 # Wiring:
+#   GPIO 12 → JX PDI-6621 steering servo signal wire
 #   GPIO 18 → QuicRun 1060 ESC signal wire
 #   Pi GND  → ESC BEC ground (shared)
-#   ESC BEC → powers JX PDI-6621 steering servo (servo not driven for now)
+#   ESC BEC → powers JX PDI-6621 and MG90S
 
-PWM_CHIP    = 0
-ESC_CHANNEL = 2   # GPIO 18 = PWM0_CHAN2 → pwmchip0/pwm2
+PWM_CHIP      = 0
+STEER_CHANNEL = 0   # GPIO 12 = PWM0_CHAN0 → pwmchip0/pwm0
+ESC_CHANNEL   = 2   # GPIO 18 = PWM0_CHAN2 → pwmchip0/pwm2
 
 PWM_PERIOD_NS  = 20_000_000   # 20 ms = 50 Hz
 
@@ -26,6 +32,10 @@ PWM_PERIOD_NS  = 20_000_000   # 20 ms = 50 Hz
 ESC_NEUTRAL_US = 1500
 ESC_FWD_MAX_US = 2000
 ESC_REV_MAX_US = 1000
+
+STEER_CENTER_US = 1500   # 0 °  (trim this if the servo doesn't centre perfectly)
+STEER_LEFT_US   = 1000   # −90 °
+STEER_RIGHT_US  = 2000   # +90 °
 
 DEFAULT_SPEED = 50  # 0–100 %
 
@@ -73,12 +83,18 @@ def _speed_to_us(speed: int, forward: bool) -> int:
         return int(ESC_NEUTRAL_US - ratio * (ESC_NEUTRAL_US - ESC_REV_MAX_US))
 
 
+def _angle_to_steer_us(angle: int) -> int:
+    """Map −90..90 ° to pulse width for the JX PDI-6621 steering servo."""
+    angle = max(-90, min(90, angle))
+    return int(1500 + (angle / 90.0) * 500)
+
+
 class AgriMove:
     """
-    Drivetrain controller for AgriBot — ESC only (GPIO 18, sysfs hardware PWM).
+    Drivetrain controller for AgriBot (sysfs hardware PWM throughout).
 
-    Steering servo (GPIO 19) is currently unconnected; steer() calls are
-    accepted but do nothing so the UI buttons remain harmless.
+      GPIO 12  pwmchip0/pwm0  JX PDI-6621 steering servo
+      GPIO 18  pwmchip0/pwm2  QuicRun 1060 ESC
     """
 
     def __init__(self, gpio_lock: threading.Lock):
@@ -90,8 +106,10 @@ class AgriMove:
             'speed':     DEFAULT_SPEED,
         }
 
-        self._esc = _SysfsPWM(PWM_CHIP, ESC_CHANNEL)
+        self._steer = _SysfsPWM(PWM_CHIP, STEER_CHANNEL)
+        self._esc   = _SysfsPWM(PWM_CHIP, ESC_CHANNEL)
 
+        self._steer.set_pulsewidth_us(STEER_CENTER_US)
         # Arm the QuicRun 1060: hold neutral for 2 s (ESC beeps when ready)
         self._esc.set_pulsewidth_us(ESC_NEUTRAL_US)
         time.sleep(2.0)
@@ -127,10 +145,13 @@ class AgriMove:
             with self._lock:
                 self._esc.set_pulsewidth_us(_speed_to_us(speed, forward=False))
 
-    # ── Steering (no-op until servo is wired) ────────────────────────────────
+    # ── Steering ──────────────────────────────────────────────────────────────
 
     def steer(self, angle: int):
-        self._state['steering'] = max(-90, min(90, int(angle)))
+        angle = max(-90, min(90, int(angle)))
+        with self._lock:
+            self._steer.set_pulsewidth_us(_angle_to_steer_us(angle))
+            self._state['steering'] = angle
 
     def steer_left(self):
         self.steer(-45)
@@ -148,5 +169,7 @@ class AgriMove:
 
     def cleanup(self):
         self.stop()
+        self.steer_center()
         time.sleep(0.2)
+        self._steer.stop()
         self._esc.stop()

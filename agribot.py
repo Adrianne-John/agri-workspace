@@ -26,23 +26,24 @@ GPIO.setwarnings(False)
 GPIO.setup(LASER_PIN, GPIO.OUT)
 GPIO.output(LASER_PIN, GPIO.LOW)
 
-# ── Camera pan servo — sysfs hardware PWM on GPIO 19 (pwmchip0/pwm3) ─────────
-# GPIO 19 = PWM0_CHAN3 (confirmed via `pinctrl get 19`).
-# Using sysfs instead of RPi.GPIO software PWM eliminates jitter on the MG90S.
+# ── Camera servos — sysfs hardware PWM ───────────────────────────────────────
+# GPIO 19 = PWM0_CHAN3 → pwmchip0/pwm3  pan  (left / right)
+# GPIO 13 = PWM0_CHAN1 → pwmchip0/pwm1  tilt (up   / down)
 from agriMove import _SysfsPWM, PWM_PERIOD_NS
 
-_CAMERA_PWM_CHIP    = 0
-_CAMERA_PWM_CHANNEL = 3   # pwmchip0/pwm3 = GPIO 19
+camera_pan  = _SysfsPWM(0, 3)   # GPIO 19
+camera_tilt = _SysfsPWM(0, 1)   # GPIO 13
 
-camera_servo = _SysfsPWM(_CAMERA_PWM_CHIP, _CAMERA_PWM_CHANNEL)
-camera_servo.set_pulsewidth_us(1500)   # centre on startup
+camera_pan.set_pulsewidth_us(1500)    # centre on startup
+camera_tilt.set_pulsewidth_us(1500)   # centre on startup
 
 # ── Drivetrain ────────────────────────────────────────────────────────────────
 gpio_lock = threading.Lock()
 agri_move = AgriMove(gpio_lock)
 
 state = {
-    'servo1': 0,   # camera pan angle in degrees
+    'servo1': 0,   # camera pan  (GPIO 19, left/right)
+    'servo2': 0,   # camera tilt (GPIO 13, up/down)
     'laser':  False,
 }
 
@@ -52,22 +53,34 @@ def _angle_to_us(angle: int) -> int:
     return int(1500 + (max(-90, min(90, angle)) / 90.0) * 500)
 
 
+_servo_devices = {}   # populated after servos are constructed
+
+
+def _servo_device(servo):
+    return _servo_devices.get(servo)
+
+
 def set_servo(servo, angle):
     angle = max(-90, min(90, int(angle)))
-    camera_servo.set_pulsewidth_us(_angle_to_us(angle))
+    _servo_device(servo).set_pulsewidth_us(_angle_to_us(angle))
     state[servo] = angle
 
 
 def smooth_move(servo, target):
+    dev = _servo_device(servo)
     def _run():
         current = state[servo]
         target_ = max(-90, min(90, int(target)))
         direction = 1 if target_ > current else -1
         for a in range(current, target_ + direction, direction):
-            camera_servo.set_pulsewidth_us(_angle_to_us(a))
+            dev.set_pulsewidth_us(_angle_to_us(a))
             state[servo] = a
             time.sleep(0.02)
     threading.Thread(target=_run, daemon=True).start()
+
+
+_servo_devices['servo1'] = camera_pan
+_servo_devices['servo2'] = camera_tilt
 
 
 # ── YOLO model ────────────────────────────────────────────────────────────────
@@ -346,10 +359,11 @@ def _shutdown():
         agri_move.cleanup()
     except Exception:
         pass
-    try:
-        camera_servo.stop()
-    except Exception:
-        pass
+    for dev in _servo_devices.values():
+        try:
+            dev.stop()
+        except Exception:
+            pass
     GPIO.cleanup()
     print("GPIO cleaned up.")
 
