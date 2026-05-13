@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgriBot Interface</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div id="toast"></div>
+<h1>AgriBot Interface</h1>
+
+<!-- Camera row -->
+<div class="row">
+  <div class="panel live-panel">
+    <div class="panel-title">Live Feed</div>
+    <img src="/stream" alt="Live feed">
+    <div class="cam-controls">
+      <button class="btn-primary" id="captureBtn" onclick="capture()">Capture</button>
+      <span id="camStatus"></span>
+    </div>
+  </div>
+
+  <div class="panel preview-panel">
+    <div class="panel-title">Last Capture</div>
+    <div id="previewContainer"><div class="placeholder">No capture yet</div></div>
+    <div class="capture-info" id="captureInfo"></div>
+  </div>
+
+  <!-- Detection panel -->
+  <div class="panel det-panel">
+    <div class="panel-title">
+      Weed Detection
+      <span class="det-count" id="detCount">0</span>
+    </div>
+    <div class="det-body">
+      <div class="det-toggle-row">
+        <button class="btn-toggle on" id="detToggle" onclick="toggleDetect()">Overlay ON</button>
+        <span style="font-size:.72rem;color:#718096;">~2.5 fps inference</span>
+      </div>
+      <div class="det-list" id="detList">
+        <div class="det-empty">No detections</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Movement row -->
+<div class="row">
+  <div class="panel move-panel">
+    <div class="panel-title">
+      Movement Control
+      <span class="gpio-tag">ESC GPIO 18</span>
+    </div>
+    <div class="move-body">
+
+      <!-- D-Pad -->
+      <div class="dpad">
+        <div></div>
+        <button class="dpad-btn" id="btn-forward"
+          onmousedown="driveStart('forward')"  onmouseup="driveStop()" onmouseleave="driveStop()"
+          ontouchstart="driveStart('forward')" ontouchend="driveStop()">&#9650;</button>
+        <div></div>
+
+        <button class="dpad-btn" id="btn-left"
+          onmousedown="steerDir('left')"   onmouseup="steerCenter()" onmouseleave="steerCenter()"
+          ontouchstart="steerDir('left')"  ontouchend="steerCenter()">&#9664;</button>
+        <button class="dpad-btn stop-btn" onclick="driveStop()">&#9632;</button>
+        <button class="dpad-btn" id="btn-right"
+          onmousedown="steerDir('right')"  onmouseup="steerCenter()" onmouseleave="steerCenter()"
+          ontouchstart="steerDir('right')" ontouchend="steerCenter()">&#9654;</button>
+
+        <div></div>
+        <button class="dpad-btn" id="btn-backward"
+          onmousedown="driveStart('backward')"  onmouseup="driveStop()" onmouseleave="driveStop()"
+          ontouchstart="driveStart('backward')" ontouchend="driveStop()">&#9660;</button>
+        <div></div>
+      </div>
+
+      <div class="move-status" id="moveStatus">Direction: <b>stop</b> &nbsp;|&nbsp; Steering: <b>0°</b></div>
+
+      <!-- Speed -->
+      <div class="speed-block">
+        <div class="speed-label">Speed <span id="speedVal">50%</span></div>
+        <input type="range" id="speedSlider" min="0" max="100" value="50"
+               oninput="onSpeedInput(this.value)" onchange="setSpeed(this.value)">
+      </div>
+
+      <!-- Steering fine control -->
+      <div class="steer-block">
+        <div class="steer-label">
+          Steering angle
+          <span id="steerVal">0°</span>
+        </div>
+        <input type="range" id="steerSlider" min="-90" max="90" value="0"
+               oninput="document.getElementById('steerVal').textContent=this.value+'°'"
+               onchange="steerAngle(this.value)">
+        <div class="servo-btns">
+          <button class="btn-sm" onclick="steerPreset(-90)">Full L</button>
+          <button class="btn-sm" onclick="steerPreset(-45)">Left</button>
+          <button class="btn-sm" onclick="steerPreset(0)">Center</button>
+          <button class="btn-sm" onclick="steerPreset(45)">Right</button>
+          <button class="btn-sm" onclick="steerPreset(90)">Full R</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Controls row -->
+<div class="row">
+  <div class="panel ctrl-panel">
+    <div class="panel-title">Camera &amp; Laser Controls</div>
+    <div class="ctrl-body">
+
+      <!-- Camera Pan -->
+      <div class="servo-block">
+        <div class="servo-label">
+          Camera Pan <span class="gpio-tag">GPIO 19</span>
+          <span id="s1val">0°</span>
+        </div>
+        <input type="range" id="s1" min="-90" max="90" value="0"
+               oninput="liveLabel('s1','s1val')"
+               onchange="moveServo('servo1', this.value, false)">
+        <div class="servo-btns">
+          <button class="btn-sm" onclick="setServo('servo1','s1',-90)">Full L</button>
+          <button class="btn-sm" onclick="setServo('servo1','s1',-45)">Left</button>
+          <button class="btn-sm" onclick="setServo('servo1','s1',0)">Center</button>
+          <button class="btn-sm" onclick="setServo('servo1','s1',45)">Right</button>
+          <button class="btn-sm" onclick="setServo('servo1','s1',90)">Full R</button>
+        </div>
+        <div class="smooth-row">
+          <input type="checkbox" id="smooth1">
+          <label for="smooth1">Smooth move for presets</label>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Laser -->
+      <div class="laser-block">
+        <div>
+          <div class="laser-info">Laser <span class="gpio-tag">GPIO 22</span></div>
+          <div class="laser-status off" id="laserStatus">OFF</div>
+        </div>
+        <button class="btn-laser off" id="laserBtn" onclick="toggleLaser()">Turn ON</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
