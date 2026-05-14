@@ -546,8 +546,7 @@ def _scan_and_fire(fired_labels: set) -> bool:
     target = _get_best_target()
     if not target or target['label'] in fired_labels:
         return False
-    _snap_track_to_target(target)             # coarse alignment
-    _track_for_duration(AUTO_TRACK_DURATION)  # 10 s fine-tracking
+    _track_for_duration(AUTO_TRACK_DURATION)  # 10 s fine-tracking from scan position
     # Target was confirmed above; fire unconditionally — do not re-check
     # _get_best_target() here because detection_loop blanks latest_dets mid-cycle
     # and the race would silently skip the laser even when perfectly aligned.
