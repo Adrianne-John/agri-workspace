@@ -52,8 +52,8 @@ state = {
 
 
 def _angle_to_us(angle: int) -> int:
-    """Map −90..90 ° to 1000..2000 µs (standard servo pulse width)."""
-    return int(1500 + (max(-90, min(90, angle)) / 90.0) * 500)
+    """Map −90..90 ° to 500..2500 µs (MG90S full range)."""
+    return int(1500 + (max(-90, min(90, angle)) / 90.0) * 1000)
 
 
 _servo_devices = {}   # populated after servos are constructed
