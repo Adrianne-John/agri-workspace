@@ -2,26 +2,22 @@ import os
 import time
 import threading
 
-# ── Hardware PWM via sysfs ────────────────────────────────────────────────────
-# All three devices use pwmchip0 (RP1 PWM0 block), confirmed via pinctrl:
-#
-#   GPIO 12  →  PWM0_CHAN0  →  pwmchip0/pwm0   JX PDI-6621 steering servo
-#   GPIO 18  →  PWM0_CHAN2  →  pwmchip0/pwm2   QuicRun 1060 ESC
-#   GPIO 19  →  PWM0_CHAN3  →  pwmchip0/pwm3   MG90S camera pan (agribot.py)
-#
-# config.txt overlays:
-#   dtoverlay=pwm,pin=12,func=4
-#   dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
-#
-# Wiring:
-#   GPIO 12 → JX PDI-6621 steering servo signal wire
-#   GPIO 18 → QuicRun 1060 ESC signal wire
-#   Pi GND  → ESC BEC ground (shared)
-#   ESC BEC → powers JX PDI-6621 and MG90S
+import board
+from adafruit_pca9685 import PCA9685 as _PCA9685Driver
 
-PWM_CHIP      = 0
-STEER_CHANNEL = 0   # GPIO 12 = PWM0_CHAN0 → pwmchip0/pwm0
-ESC_CHANNEL   = 2   # GPIO 18 = PWM0_CHAN2 → pwmchip0/pwm2
+# ── Hardware PWM via sysfs ────────────────────────────────────────────────────
+# GPIO 18  →  PWM0_CHAN2  →  pwmchip0/pwm2   QuicRun 1060 ESC  (stays on sysfs)
+#
+# config.txt overlay:
+#   dtoverlay=pwm-2chan,pin=18,func=2
+#
+# ── PCA9685 I2C PWM (I2C1, default address 0x40) ─────────────────────────────
+# CH0  →  tilt servo   (camera up / down)      — agribot.py
+# CH2  →  pan servo    (camera left / right)   — agribot.py
+# CH4  →  JX PDI-6621  (bot steering)
+
+PWM_CHIP    = 0
+ESC_CHANNEL = 2   # GPIO 18 = PWM0_CHAN2 → pwmchip0/pwm2
 
 PWM_PERIOD_NS  = 20_000_000   # 20 ms = 50 Hz
 
@@ -52,14 +48,18 @@ class _SysfsPWM:
             with open(f"/sys/class/pwm/pwmchip{chip}/export", 'w') as f:
                 f.write(str(channel))
             time.sleep(0.15)
-
+        self._write('enable',     0)
         self._write('period',     PWM_PERIOD_NS)
         self._write('duty_cycle', 0)
         self._write('enable',     1)
 
     def _write(self, attr: str, value):
-        with open(f"{self._base}/{attr}", 'w') as f:
-            f.write(str(int(value)))
+        try:
+            with open(f"{self._base}/{attr}", 'w') as f:
+                f.write(str(int(value)))
+        except OSError as e:
+            # Catching the error ensures your app doesn't silently fail 
+            print(f"PWM Write Error on {self._base}/{attr}: {e}")
 
     def set_pulsewidth_us(self, us: int):
         duty_ns = max(0, min(PWM_PERIOD_NS, int(us) * 1000))
@@ -73,6 +73,32 @@ class _SysfsPWM:
                 f.write(str(self._channel))
         except OSError:
             pass
+
+
+# ── PCA9685 channel wrapper ───────────────────────────────────────────────────
+_PCA9685_PERIOD_US = 20_000.0   # 50 Hz → 20 ms period
+
+def _init_pca9685() -> _PCA9685Driver:
+    i2c = board.I2C()
+    pca = _PCA9685Driver(i2c)
+    pca.frequency = 50
+    return pca
+
+_pca9685 = _init_pca9685()
+
+
+class _PCA9685Channel:
+    """Wraps one channel of the shared PCA9685; same interface as _SysfsPWM."""
+
+    def __init__(self, channel: int):
+        self._ch = _pca9685.channels[channel]
+
+    def set_pulsewidth_us(self, us: int):
+        duty = int(max(0.0, min(_PCA9685_PERIOD_US, float(us))) / _PCA9685_PERIOD_US * 0xFFFF)
+        self._ch.duty_cycle = duty
+
+    def stop(self):
+        self._ch.duty_cycle = 0
 
 
 def _speed_to_us(speed: int, forward: bool) -> int:
@@ -91,10 +117,10 @@ def _angle_to_steer_us(angle: int) -> int:
 
 class AgriMove:
     """
-    Drivetrain controller for AgriBot (sysfs hardware PWM throughout).
+    Drivetrain controller for AgriBot.
 
-      GPIO 12  pwmchip0/pwm0  JX PDI-6621 steering servo
-      GPIO 18  pwmchip0/pwm2  QuicRun 1060 ESC
+      PCA9685 CH4  JX PDI-6621 steering servo
+      GPIO 18      pwmchip0/pwm2  QuicRun 1060 ESC  (sysfs)
     """
 
     def __init__(self, gpio_lock: threading.Lock):
@@ -106,7 +132,7 @@ class AgriMove:
             'speed':     DEFAULT_SPEED,
         }
 
-        self._steer = _SysfsPWM(PWM_CHIP, STEER_CHANNEL)
+        self._steer = _PCA9685Channel(4)
         self._esc   = _SysfsPWM(PWM_CHIP, ESC_CHANNEL)
 
         self._steer.set_pulsewidth_us(STEER_CENTER_US)

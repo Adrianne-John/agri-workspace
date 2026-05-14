@@ -1,3 +1,4 @@
+#!/home/agribot/Desktop/agri-workspace/.venv/bin/python
 import io
 import time
 import threading
@@ -11,28 +12,30 @@ from ultralytics import YOLO
 from agriMove import AgriMove
 
 # ── Pin assignments ───────────────────────────────────────────────────────────
-# GPIO 18 = ESC (sysfs PWM, handled by agriMove.py)
-# GPIO 19 = Camera pan servo MG90S — pwmchip0/pwm3 (hardware PWM, sysfs)
-# GPIO 22 = Laser
+# GPIO 18     = ESC (sysfs PWM, handled by agriMove.py)
+# PCA9685 CH0 = Camera tilt servo MG90S (I2C)
+# PCA9685 CH2 = Camera pan  servo MG90S (I2C)
+# PCA9685 CH4 = Steering servo JX PDI-6621 (I2C, handled by agriMove.py)
+# GPIO 22     = Laser
 LASER_PIN = 22
 
 DATASET_DIR = Path("/home/agribot/Desktop/agri-workspace/dataset")
 DATASET_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── GPIO setup (laser only — servos use sysfs hardware PWM, not RPi.GPIO) ────
+# ── GPIO setup (laser only — servos use PCA9685 I2C, not RPi.GPIO) ──────────
 GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 GPIO.setup(LASER_PIN, GPIO.OUT)
 GPIO.output(LASER_PIN, GPIO.LOW)
 
-# ── Camera servos — sysfs hardware PWM ───────────────────────────────────────
-# GPIO 19 = PWM0_CHAN3 → pwmchip0/pwm3  pan  (left / right)
-# GPIO 13 = PWM0_CHAN1 → pwmchip0/pwm1  tilt (up   / down)
-from agriMove import _SysfsPWM, PWM_PERIOD_NS
+# ── Camera servos — PCA9685 I2C ──────────────────────────────────────────────
+# CH2 = pan  (left / right)
+# CH0 = tilt (up   / down)
+from agriMove import _PCA9685Channel
 
-camera_pan  = _SysfsPWM(0, 3)   # GPIO 19
-camera_tilt = _SysfsPWM(0, 1)   # GPIO 13
+camera_pan  = _PCA9685Channel(2)
+camera_tilt = _PCA9685Channel(0)
 
 camera_pan.set_pulsewidth_us(1500)    # centre on startup
 camera_tilt.set_pulsewidth_us(1500)   # centre on startup
@@ -42,8 +45,8 @@ gpio_lock = threading.Lock()
 agri_move = AgriMove(gpio_lock)
 
 state = {
-    'servo1': 0,   # camera pan  (GPIO 19, left/right)
-    'servo2': 0,   # camera tilt (GPIO 13, up/down)
+    'servo1': 0,   # camera pan  (PCA9685 CH2, left/right)
+    'servo2': 0,   # camera tilt (PCA9685 CH0, up/down)
     'laser':  False,
 }
 
