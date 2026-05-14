@@ -14,7 +14,10 @@
 <div class="row">
   <div class="panel live-panel">
     <div class="panel-title">Live Feed</div>
-    <img src="/stream" alt="Live feed">
+    <div class="feed-wrapper">
+      <img src="/stream" alt="Live feed">
+      <canvas id="laserCanvas" class="laser-canvas"></canvas>
+    </div>
     <div class="cam-controls">
       <button class="btn-primary" id="captureBtn" onclick="capture()">Capture</button>
       <span id="camStatus"></span>
@@ -174,6 +177,46 @@
         <button class="btn-laser off" id="laserBtn" onclick="toggleLaser()">Turn ON</button>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<!-- Laser Pointer row -->
+<div class="row">
+  <div class="panel lp-panel">
+    <div class="panel-title">
+      Laser Pointer
+      <button class="btn-toggle off" id="lpToggle" onclick="toggleLP()">Overlay OFF</button>
+    </div>
+    <div class="lp-body">
+
+      <div class="lp-row">
+
+        <div class="lp-slider-block">
+          <div class="lp-label">Width <span id="lpWidthVal">80 px</span></div>
+          <input type="range" id="lpWidth" min="10" max="400" value="80"
+                 oninput="updateLP('width', this.value)">
+        </div>
+
+        <div class="lp-slider-block">
+          <div class="lp-label">Length <span id="lpLenVal">80 px</span></div>
+          <input type="range" id="lpLen" min="10" max="400" value="80"
+                 oninput="updateLP('length', this.value)">
+        </div>
+
+        <div class="lp-slider-block">
+          <div class="lp-label">X Position <span id="lpXVal">320 px</span></div>
+          <input type="range" id="lpX" min="0" max="640" value="320"
+                 oninput="updateLP('x', this.value)">
+        </div>
+
+        <div class="lp-slider-block">
+          <div class="lp-label">Y Position <span id="lpYVal">240 px</span></div>
+          <input type="range" id="lpY" min="0" max="480" value="240"
+                 oninput="updateLP('y', this.value)">
+        </div>
+
+      </div>
     </div>
   </div>
 </div>

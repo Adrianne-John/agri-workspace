@@ -159,6 +159,55 @@ async function setSpeed(val) {
     document.getElementById('speedVal').textContent = data.state.speed + '%';
 }
 
+// ── Laser Pointer Overlay ─────────────────────────────────────────────────────
+let lp = { x: 320, y: 240, w: 80, h: 80, visible: false };
+
+function updateLP(prop, val) {
+  val = parseInt(val);
+  if (prop === 'width')  { lp.w = val; document.getElementById('lpWidthVal').textContent = val + ' px'; }
+  if (prop === 'length') { lp.h = val; document.getElementById('lpLenVal').textContent   = val + ' px'; }
+  if (prop === 'x')      { lp.x = val; document.getElementById('lpXVal').textContent     = val + ' px'; }
+  if (prop === 'y')      { lp.y = val; document.getElementById('lpYVal').textContent     = val + ' px'; }
+  drawLP();
+}
+
+function toggleLP() {
+  lp.visible = !lp.visible;
+  const btn = document.getElementById('lpToggle');
+  btn.textContent  = lp.visible ? 'Overlay ON' : 'Overlay OFF';
+  btn.className    = lp.visible ? 'btn-toggle on' : 'btn-toggle off';
+  drawLP();
+}
+
+function drawLP() {
+  const canvas = document.getElementById('laserCanvas');
+  const ctx    = canvas.getContext('2d');
+  canvas.width  = 640;
+  canvas.height = 480;
+  ctx.clearRect(0, 0, 640, 480);
+  if (!lp.visible) return;
+
+  const x     = lp.x - lp.w / 2;
+  const y     = lp.y - lp.h / 2;
+  const color = laserOn ? '#f6e05e' : '#68d391';
+  const tick  = Math.max(6, Math.min(lp.w, lp.h) * 0.12);
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 2;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = 8;
+
+  // Targeting rectangle
+  ctx.strokeRect(x, y, lp.w, lp.h);
+
+  // Corner ticks
+  const cx = lp.x, cy = lp.y;
+  ctx.beginPath();
+  ctx.moveTo(cx - tick, cy); ctx.lineTo(cx + tick, cy);
+  ctx.moveTo(cx, cy - tick); ctx.lineTo(cx, cy + tick);
+  ctx.stroke();
+}
+
 // ── Detection polling ─────────────────────────────────────────────────────────
 async function pollDetections() {
   if (!detectOn) return;
