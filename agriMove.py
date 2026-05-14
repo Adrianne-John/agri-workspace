@@ -84,7 +84,8 @@ def _init_pca9685() -> _PCA9685Driver:
     pca.frequency = 50
     return pca
 
-_pca9685 = _init_pca9685()
+_pca9685     = _init_pca9685()
+_pca9685_lock = threading.Lock()   # I2C bus is shared; serialise all channel writes
 
 
 class _PCA9685Channel:
@@ -95,10 +96,12 @@ class _PCA9685Channel:
 
     def set_pulsewidth_us(self, us: int):
         duty = int(max(0.0, min(_PCA9685_PERIOD_US, float(us))) / _PCA9685_PERIOD_US * 0xFFFF)
-        self._ch.duty_cycle = duty
+        with _pca9685_lock:
+            self._ch.duty_cycle = duty
 
     def stop(self):
-        self._ch.duty_cycle = 0
+        with _pca9685_lock:
+            self._ch.duty_cycle = 0
 
 
 def _speed_to_us(speed: int, forward: bool) -> int:

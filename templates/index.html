@@ -205,17 +205,22 @@
         </div>
 
         <div class="lp-slider-block">
-          <div class="lp-label">X Position <span id="lpXVal">320 px</span></div>
-          <input type="range" id="lpX" min="0" max="640" value="320"
-                 oninput="updateLP('x', this.value)">
+          <div class="lp-label">X Offset <span id="lpOxVal">0 px</span></div>
+          <input type="range" id="lpOx" min="-300" max="300" value="0"
+                 oninput="updateLP('ox', this.value)" onchange="syncOffset()">
         </div>
 
         <div class="lp-slider-block">
-          <div class="lp-label">Y Position <span id="lpYVal">240 px</span></div>
-          <input type="range" id="lpY" min="0" max="480" value="240"
-                 oninput="updateLP('y', this.value)">
+          <div class="lp-label">Y Offset <span id="lpOyVal">0 px</span></div>
+          <input type="range" id="lpOy" min="-220" max="220" value="0"
+                 oninput="updateLP('oy', this.value)" onchange="syncOffset()">
         </div>
 
+      </div>
+
+      <div class="lp-actions">
+        <span class="lp-note">Laser is fixed at frame center — auto track steers servos to center the weed</span>
+        <button class="btn-toggle off" id="trackToggle" onclick="toggleTrack()">Auto Track OFF</button>
       </div>
     </div>
   </div>

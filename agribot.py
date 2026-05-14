@@ -69,21 +69,52 @@ def set_servo(servo, angle):
     state[servo] = angle
 
 
+# Generation counter: incrementing before a new smooth_move causes the running
+# thread to notice it has been preempted and exit early.
+_smooth_gen = {'servo1': 0, 'servo2': 0}
+
+
 def smooth_move(servo, target):
     dev = _servo_device(servo)
+    _smooth_gen[servo] += 1
+    gen = _smooth_gen[servo]
+
     def _run():
         current = state[servo]
         target_ = max(-90, min(90, int(target)))
-        direction = 1 if target_ > current else -1
-        for a in range(current, target_ + direction, direction):
+        if current == target_:
+            return
+        step = 1 if target_ > current else -1
+        for a in range(current, target_ + step, step):
+            if _smooth_gen[servo] != gen:   # preempted by newer call
+                return
             dev.set_pulsewidth_us(_angle_to_us(a))
             state[servo] = a
-            time.sleep(0.02)
+            time.sleep(0.015)
+
     threading.Thread(target=_run, daemon=True).start()
 
 
 _servo_devices['servo1'] = camera_pan
 _servo_devices['servo2'] = camera_tilt
+
+# ── Auto-tracking ─────────────────────────────────────────────────────────────
+auto_track  = False
+track_lock  = threading.Lock()
+
+# Approximate Pi Camera v2 FOV; adjust if you have a different lens.
+_TRACK_FOV_H      = 62.0   # horizontal degrees
+_TRACK_FOV_V      = 48.0   # vertical degrees
+_TRACK_W          = 640
+_TRACK_H          = 480
+_TRACK_DEADZONE   = 18     # pixels — ignore error smaller than this
+_TRACK_GAIN       = 0.21   # proportional gain — 70% reduced from 0.7 for smooth lock-in
+_TRACK_LABELS     = {'WeedA'}
+
+# Laser box offset — kept in sync with the frontend sliders via /api/laser/offset
+laser_ox   = 0
+laser_oy   = 0
+laser_offset_lock = threading.Lock()
 
 
 # ── YOLO model ────────────────────────────────────────────────────────────────
@@ -198,10 +229,94 @@ def detection_loop():
         time.sleep(DETECT_INTERVAL)
 
 
+_TRACK_DEBOUNCE = 2.0   # settling window (seconds) after initial snap move
+
+
+def tracking_loop():
+    """Three-phase weed tracker:
+      1. INITIAL SNAP  — weed first detected: immediately calculate full-correction
+                         pan/tilt angles and move there in one smooth move.
+      2. SETTLING      — wait _TRACK_DEBOUNCE seconds for the camera to physically
+                         reach the position and for detections to stabilise.
+      3. FINE TRACKING — weed still visible after settling: apply proportional
+                         corrections continuously until weed leaves frame."""
+    deg_px_h = _TRACK_FOV_H / _TRACK_W   # ~0.097 deg/px
+    deg_px_v = _TRACK_FOV_V / _TRACK_H   # ~0.100 deg/px
+    weed_first_seen = None
+    snapped = False   # True after Phase 1 snap fires; prevents reset on YOLO loss
+
+    while not _stop_capture.is_set():
+        with track_lock:
+            active = auto_track
+        if not active:
+            weed_first_seen = None
+            snapped = False
+            time.sleep(0.15)
+            continue
+
+        with detect_lock_dets:
+            weeds = [d for d in latest_dets if d['label'] in _TRACK_LABELS]
+
+        if not weeds:
+            if not snapped:
+                # No detection and no snap yet — reset, keep waiting
+                weed_first_seen = None
+            # After snap: YOLO may flicker — hold position, don't reset
+            time.sleep(0.15)
+            continue
+
+        best    = max(weeds, key=lambda d: d['conf'])
+        weed_cx = (best['x1'] + best['x2']) / 2.0
+        weed_cy = (best['y1'] + best['y2']) / 2.0
+
+        # Target is the laser box center (frame center + calibration offset)
+        with laser_offset_lock:
+            ox, oy = laser_ox, laser_oy
+        target_x = _TRACK_W / 2.0 + ox
+        target_y = _TRACK_H / 2.0 + oy
+
+        dx = weed_cx - target_x   # + = weed is right of laser box
+        dy = weed_cy - target_y   # + = weed is below laser box
+
+        now = time.time()
+
+        # ── Phase 1: initial snap ─────────────────────────────────────────────
+        if weed_first_seen is None:
+            weed_first_seen = now
+            snapped = True
+            pan_snap  = max(-90.0, min(90.0, state['servo1'] - dx * deg_px_h))
+            tilt_snap = max(-90.0, min(90.0, state['servo2'] + dy * deg_px_v))
+            smooth_move('servo1', int(pan_snap))
+            smooth_move('servo2', int(tilt_snap))
+            time.sleep(0.15)
+            continue
+
+        # ── Phase 2: settling window ──────────────────────────────────────────
+        if now - weed_first_seen < _TRACK_DEBOUNCE:
+            time.sleep(0.15)
+            continue
+
+        # ── Phase 3: fine tracking ────────────────────────────────────────────
+        if abs(dx) < _TRACK_DEADZONE and abs(dy) < _TRACK_DEADZONE:
+            time.sleep(0.15)
+            continue
+
+        # Pan: negate dx because JS negates servo1 angle (hardware inversion fix)
+        pan_target  = max(-90.0, min(90.0, state['servo1'] - dx * deg_px_h * _TRACK_GAIN))
+        tilt_target = max(-90.0, min(90.0, state['servo2'] + dy * deg_px_v * _TRACK_GAIN))
+
+        smooth_move('servo1', int(pan_target))
+        smooth_move('servo2', int(tilt_target))
+
+        time.sleep(DETECT_INTERVAL + 0.1)
+
+
 _capture_thread   = threading.Thread(target=capture_frames,   daemon=True)
 _detection_thread = threading.Thread(target=detection_loop,   daemon=True)
+_tracking_thread  = threading.Thread(target=tracking_loop,    daemon=True)
 _capture_thread.start()
 _detection_thread.start()
+_tracking_thread.start()
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 # HTML → templates/index.html
@@ -248,6 +363,19 @@ def api_servo():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/laser/offset", methods=["POST"])
+def api_laser_offset():
+    global laser_ox, laser_oy
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        with laser_offset_lock:
+            laser_ox = int(data.get("ox", 0))
+            laser_oy = int(data.get("oy", 0))
+        return jsonify({"success": True, "ox": laser_ox, "oy": laser_oy})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/laser", methods=["POST"])
 def api_laser():
     try:
@@ -261,9 +389,20 @@ def api_laser():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/track/toggle", methods=["POST"])
+def api_track_toggle():
+    global auto_track
+    with track_lock:
+        auto_track = not auto_track
+        t = auto_track
+    return jsonify({"tracking": t})
+
+
 @app.route("/api/status")
 def api_status():
-    return jsonify(state)
+    with track_lock:
+        t = auto_track
+    return jsonify({**state, 'auto_track': t})
 
 
 @app.route("/api/detections")

@@ -160,23 +160,51 @@ async function setSpeed(val) {
 }
 
 // ── Laser Pointer Overlay ─────────────────────────────────────────────────────
-let lp = { x: 320, y: 240, w: 80, h: 80, visible: false };
+// lockedBox: last known WeedA bounding box while auto-track is on.
+// Updated each poll when YOLO detects a weed; sticks at last position when YOLO
+// loses detection so the duplicate box stays visible during the lock-in phase.
+let lp        = { w: 80, h: 80, ox: 0, oy: 0, visible: false };
+let autoTrack = false;
+let lockedBox = null;   // { x1, y1, x2, y2, cx, cy }
 
 function updateLP(prop, val) {
   val = parseInt(val);
-  if (prop === 'width')  { lp.w = val; document.getElementById('lpWidthVal').textContent = val + ' px'; }
-  if (prop === 'length') { lp.h = val; document.getElementById('lpLenVal').textContent   = val + ' px'; }
-  if (prop === 'x')      { lp.x = val; document.getElementById('lpXVal').textContent     = val + ' px'; }
-  if (prop === 'y')      { lp.y = val; document.getElementById('lpYVal').textContent     = val + ' px'; }
+  if (prop === 'width')  { lp.w  = val; document.getElementById('lpWidthVal').textContent = val + ' px'; }
+  if (prop === 'length') { lp.h  = val; document.getElementById('lpLenVal').textContent   = val + ' px'; }
+  if (prop === 'ox')     { lp.ox = val; document.getElementById('lpOxVal').textContent    = val + ' px'; }
+  if (prop === 'oy')     { lp.oy = val; document.getElementById('lpOyVal').textContent    = val + ' px'; }
   drawLP();
 }
 
 function toggleLP() {
   lp.visible = !lp.visible;
   const btn = document.getElementById('lpToggle');
-  btn.textContent  = lp.visible ? 'Overlay ON' : 'Overlay OFF';
-  btn.className    = lp.visible ? 'btn-toggle on' : 'btn-toggle off';
+  btn.textContent = lp.visible ? 'Overlay ON' : 'Overlay OFF';
+  btn.className   = lp.visible ? 'btn-toggle on' : 'btn-toggle off';
   drawLP();
+}
+
+async function syncOffset() {
+  try {
+    await fetch('/api/laser/offset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ox: lp.ox, oy: lp.oy })
+    });
+  } catch (e) { toast('Offset sync failed: ' + e, false); }
+}
+
+async function toggleTrack() {
+  try {
+    const res  = await fetch('/api/track/toggle', { method: 'POST' });
+    const data = await res.json();
+    autoTrack = data.tracking;
+    if (!autoTrack) { lockedBox = null; drawLP(); }
+    const btn = document.getElementById('trackToggle');
+    btn.textContent = autoTrack ? 'Auto Track ON' : 'Auto Track OFF';
+    btn.className   = autoTrack ? 'btn-toggle on' : 'btn-toggle off';
+    toast(autoTrack ? 'Auto Track enabled' : 'Auto Track disabled');
+  } catch (e) { toast('Track toggle failed: ' + e, false); }
 }
 
 function drawLP() {
@@ -185,11 +213,41 @@ function drawLP() {
   canvas.width  = 640;
   canvas.height = 480;
   ctx.clearRect(0, 0, 640, 480);
+
+  // Draw frozen duplicate detection box + center crosshair (always visible)
+  if (lockedBox) {
+    const bx = lockedBox.cx, by = lockedBox.cy;
+    const bw = lockedBox.x2 - lockedBox.x1;
+    const bh = lockedBox.y2 - lockedBox.y1;
+    const ctick = Math.max(8, Math.min(bw, bh) * 0.12);
+
+    ctx.strokeStyle = '#f6ad55';
+    ctx.lineWidth   = 2;
+    ctx.shadowColor = '#f6ad55';
+    ctx.shadowBlur  = 6;
+
+    // Dashed bounding box outline
+    ctx.setLineDash([8, 4]);
+    ctx.strokeRect(lockedBox.x1, lockedBox.y1, bw, bh);
+    ctx.setLineDash([]);
+
+    // Solid crosshair at bounding box center — the exact point the laser aims for
+    ctx.beginPath();
+    ctx.moveTo(bx - ctick, by); ctx.lineTo(bx + ctick, by);
+    ctx.moveTo(bx, by - ctick); ctx.lineTo(bx, by + ctick);
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+  }
+
   if (!lp.visible) return;
 
-  const x     = lp.x - lp.w / 2;
-  const y     = lp.y - lp.h / 2;
-  const color = laserOn ? '#f6e05e' : '#68d391';
+  // Laser box is always at its calibrated fixed position — never moves
+  const cx = 320 + lp.ox;
+  const cy = 240 + lp.oy;
+  const x     = cx - lp.w / 2;
+  const y     = cy - lp.h / 2;
+  const color = laserOn ? '#f6e05e' : (autoTrack ? '#fc8181' : '#68d391');
   const tick  = Math.max(6, Math.min(lp.w, lp.h) * 0.12);
 
   ctx.strokeStyle = color;
@@ -197,11 +255,8 @@ function drawLP() {
   ctx.shadowColor = color;
   ctx.shadowBlur  = 8;
 
-  // Targeting rectangle
   ctx.strokeRect(x, y, lp.w, lp.h);
 
-  // Corner ticks
-  const cx = lp.x, cy = lp.y;
   ctx.beginPath();
   ctx.moveTo(cx - tick, cy); ctx.lineTo(cx + tick, cy);
   ctx.moveTo(cx, cy - tick); ctx.lineTo(cx, cy + tick);
@@ -227,6 +282,24 @@ async function pollDetections() {
         </div>`
       ).join('');
     }
+
+    // While auto-track is on: keep lockedBox updated to the latest highest-conf
+    // WeedA detection. When YOLO loses the weed lockedBox sticks at last position
+    // so the duplicate box stays visible and the laser stays locked during settling.
+    if (autoTrack) {
+      const weeds = data.filter(d => d.label === 'WeedA');
+      if (weeds.length > 0) {
+        const best = weeds.reduce((a, b) => a.conf > b.conf ? a : b);
+        lockedBox = {
+          x1: best.x1, y1: best.y1, x2: best.x2, y2: best.y2,
+          cx: Math.round((best.x1 + best.x2) / 2),
+          cy: Math.round((best.y1 + best.y2) / 2)
+        };
+        drawLP();
+      }
+      // No else: don't clear lockedBox on detection loss — it sticks
+    }
+
   } catch (e) {}
 }
 setInterval(pollDetections, 500);

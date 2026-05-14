@@ -230,3 +230,9 @@ input[type=range]::-webkit-slider-thumb {
   font-size: .8rem; font-weight: 600; color: #a0aec0;
 }
 .lp-label span { font-size: .95rem; color: #68d391; font-weight: 700; min-width: 56px; text-align: right; }
+.lp-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding-top: 4px; border-top: 1px solid #2d3748; margin-top: 4px;
+}
+.lp-note { font-size: .72rem; color: #4a5568; flex: 1; }
