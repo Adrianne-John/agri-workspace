@@ -19,10 +19,11 @@ function liveLabel(sliderId, labelId) {
 
 async function moveServo(servo, angle, smooth) {
   try {
+    const sent = servo === 'servo1' ? -parseInt(angle) : parseInt(angle);
     const res  = await fetch('/api/servo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ servo, angle: parseInt(angle), smooth })
+      body: JSON.stringify({ servo, angle: sent, smooth })
     });
     const data = await res.json();
     if (data.success) toast(`${servo} → ${data.angle}°`);
