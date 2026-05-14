@@ -1,5 +1,6 @@
 #!/home/agribot/Desktop/agri-workspace/.venv/bin/python
 import io
+import json
 import time
 import threading
 from pathlib import Path
@@ -107,13 +108,30 @@ _TRACK_FOV_H      = 62.0   # horizontal degrees
 _TRACK_FOV_V      = 48.0   # vertical degrees
 _TRACK_W          = 640
 _TRACK_H          = 480
-_TRACK_DEADZONE   = 18     # pixels — ignore error smaller than this
+_TRACK_DEADZONE   = 10     # pixels — ignore error smaller than this
 _TRACK_GAIN       = 0.21   # proportional gain — 70% reduced from 0.7 for smooth lock-in
-_TRACK_LABELS     = {'WeedA'}
+_TRACK_LABELS     = {'WeedA', 'Pest'}
 
-# Laser box offset — kept in sync with the frontend sliders via /api/laser/offset
-laser_ox   = 0
-laser_oy   = 0
+# Laser box calibration — persisted to disk so it survives restarts
+CALIB_FILE = Path("/home/agribot/Desktop/agri-workspace/laser_calibration.json")
+
+def _load_calib() -> dict:
+    if CALIB_FILE.exists():
+        try:
+            return json.loads(CALIB_FILE.read_text())
+        except Exception:
+            pass
+    return {'ox': 0, 'oy': 0, 'w': 80, 'h': 80}
+
+def _save_calib(ox, oy, w, h):
+    try:
+        CALIB_FILE.write_text(json.dumps({'ox': ox, 'oy': oy, 'w': w, 'h': h}))
+    except Exception as e:
+        print(f"Calibration save failed: {e}")
+
+_calib        = _load_calib()
+laser_ox      = _calib['ox']
+laser_oy      = _calib['oy']
 laser_offset_lock = threading.Lock()
 
 
@@ -363,15 +381,25 @@ def api_servo():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/laser/calibration")
+def api_laser_calibration_get():
+    return jsonify(_calib)
+
+
 @app.route("/api/laser/offset", methods=["POST"])
 def api_laser_offset():
     global laser_ox, laser_oy
     try:
         data = request.get_json(force=True, silent=True) or {}
         with laser_offset_lock:
-            laser_ox = int(data.get("ox", 0))
-            laser_oy = int(data.get("oy", 0))
-        return jsonify({"success": True, "ox": laser_ox, "oy": laser_oy})
+            laser_ox = int(data.get("ox", laser_ox))
+            laser_oy = int(data.get("oy", laser_oy))
+        _calib['ox'] = laser_ox
+        _calib['oy'] = laser_oy
+        _calib['w']  = int(data.get("w", _calib.get('w', 80)))
+        _calib['h']  = int(data.get("h", _calib.get('h', 80)))
+        _save_calib(_calib['ox'], _calib['oy'], _calib['w'], _calib['h'])
+        return jsonify({"success": True, **_calib})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

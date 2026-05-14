@@ -189,10 +189,31 @@ async function syncOffset() {
     await fetch('/api/laser/offset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ox: lp.ox, oy: lp.oy })
+      body: JSON.stringify({ ox: lp.ox, oy: lp.oy, w: lp.w, h: lp.h })
     });
   } catch (e) { toast('Offset sync failed: ' + e, false); }
 }
+
+// Restore saved calibration on page load
+(async function loadCalibration() {
+  try {
+    const res  = await fetch('/api/laser/calibration');
+    const data = await res.json();
+    if (data && data.ox !== undefined) {
+      lp.ox = data.ox; lp.oy = data.oy;
+      lp.w  = data.w;  lp.h  = data.h;
+      document.getElementById('lpOx').value    = lp.ox;
+      document.getElementById('lpOy').value    = lp.oy;
+      document.getElementById('lpWidth').value = lp.w;
+      document.getElementById('lpLen').value   = lp.h;
+      document.getElementById('lpOxVal').textContent    = lp.ox + ' px';
+      document.getElementById('lpOyVal').textContent    = lp.oy + ' px';
+      document.getElementById('lpWidthVal').textContent = lp.w  + ' px';
+      document.getElementById('lpLenVal').textContent   = lp.h  + ' px';
+      drawLP();
+    }
+  } catch (e) {}
+})();
 
 async function toggleTrack() {
   try {
@@ -214,27 +235,28 @@ function drawLP() {
   canvas.height = 480;
   ctx.clearRect(0, 0, 640, 480);
 
-  // Draw frozen duplicate detection box + center crosshair (always visible)
+  // Shared crosshair tick length — identical for both boxes so they overlap cleanly
+  const TICK   = 14;
+  const MARGIN = 10;   // tolerance ring radius — "close enough" zone
+
+  // ── Frozen duplicate detection box ──────────────────────────────────────────
   if (lockedBox) {
     const bx = lockedBox.cx, by = lockedBox.cy;
     const bw = lockedBox.x2 - lockedBox.x1;
     const bh = lockedBox.y2 - lockedBox.y1;
-    const ctick = Math.max(8, Math.min(bw, bh) * 0.12);
 
     ctx.strokeStyle = '#f6ad55';
     ctx.lineWidth   = 2;
     ctx.shadowColor = '#f6ad55';
     ctx.shadowBlur  = 6;
 
-    // Dashed bounding box outline
     ctx.setLineDash([8, 4]);
     ctx.strokeRect(lockedBox.x1, lockedBox.y1, bw, bh);
     ctx.setLineDash([]);
 
-    // Solid crosshair at bounding box center — the exact point the laser aims for
     ctx.beginPath();
-    ctx.moveTo(bx - ctick, by); ctx.lineTo(bx + ctick, by);
-    ctx.moveTo(bx, by - ctick); ctx.lineTo(bx, by + ctick);
+    ctx.moveTo(bx - TICK, by); ctx.lineTo(bx + TICK, by);
+    ctx.moveTo(bx, by - TICK); ctx.lineTo(bx, by + TICK);
     ctx.stroke();
 
     ctx.shadowBlur = 0;
@@ -242,13 +264,12 @@ function drawLP() {
 
   if (!lp.visible) return;
 
-  // Laser box is always at its calibrated fixed position — never moves
-  const cx = 320 + lp.ox;
-  const cy = 240 + lp.oy;
+  // ── Laser box — fixed calibrated position ───────────────────────────────────
+  const cx    = 320 + lp.ox;
+  const cy    = 240 + lp.oy;
   const x     = cx - lp.w / 2;
   const y     = cy - lp.h / 2;
   const color = laserOn ? '#f6e05e' : (autoTrack ? '#fc8181' : '#68d391');
-  const tick  = Math.max(6, Math.min(lp.w, lp.h) * 0.12);
 
   ctx.strokeStyle = color;
   ctx.lineWidth   = 2;
@@ -257,10 +278,20 @@ function drawLP() {
 
   ctx.strokeRect(x, y, lp.w, lp.h);
 
+  // Crosshair — same TICK size as the detection crosshair
   ctx.beginPath();
-  ctx.moveTo(cx - tick, cy); ctx.lineTo(cx + tick, cy);
-  ctx.moveTo(cx, cy - tick); ctx.lineTo(cx, cy + tick);
+  ctx.moveTo(cx - TICK, cy); ctx.lineTo(cx + TICK, cy);
+  ctx.moveTo(cx, cy - TICK); ctx.lineTo(cx, cy + TICK);
   ctx.stroke();
+
+  // Tolerance margin ring — dashed circle showing the acceptable alignment zone
+  ctx.beginPath();
+  ctx.arc(cx, cy, MARGIN, 0, Math.PI * 2);
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.shadowBlur = 0;
 }
 
 // ── Detection polling ─────────────────────────────────────────────────────────
@@ -287,7 +318,7 @@ async function pollDetections() {
     // WeedA detection. When YOLO loses the weed lockedBox sticks at last position
     // so the duplicate box stays visible and the laser stays locked during settling.
     if (autoTrack) {
-      const weeds = data.filter(d => d.label === 'WeedA');
+      const weeds = data.filter(d => d.label === 'WeedA' || d.label === 'Pest');
       if (weeds.length > 0) {
         const best = weeds.reduce((a, b) => a.conf > b.conf ? a : b);
         lockedBox = {

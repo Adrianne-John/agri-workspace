@@ -195,13 +195,13 @@
         <div class="lp-slider-block">
           <div class="lp-label">Width <span id="lpWidthVal">80 px</span></div>
           <input type="range" id="lpWidth" min="10" max="400" value="80"
-                 oninput="updateLP('width', this.value)">
+                 oninput="updateLP('width', this.value)" onchange="syncOffset()">
         </div>
 
         <div class="lp-slider-block">
           <div class="lp-label">Length <span id="lpLenVal">80 px</span></div>
           <input type="range" id="lpLen" min="10" max="400" value="80"
-                 oninput="updateLP('length', this.value)">
+                 oninput="updateLP('length', this.value)" onchange="syncOffset()">
         </div>
 
         <div class="lp-slider-block">
