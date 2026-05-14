@@ -137,6 +137,41 @@ function updateMoveStatus(s) {
 function driveStart(direction) { moveCmd('/api/move', { direction }); }
 function driveStop()           { moveCmd('/api/move', { direction: 'stop' }); }
 
+async function autoRun() {
+  const btn = document.getElementById('autoRunBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  try {
+    const data = await moveCmd('/api/auto/run');
+    if (!data || !data.success) {
+      btn.disabled = false;
+      btn.textContent = 'Run';
+      toast(data && data.error ? data.error : 'Auto run failed', false);
+      return;
+    }
+    const poll = setInterval(async () => {
+      try {
+        const res  = await fetch('/api/auto/status');
+        const stat = await res.json();
+        if (stat.state) updateMoveStatus(stat.state);
+        if (!stat.running) {
+          clearInterval(poll);
+          btn.disabled = false;
+          btn.textContent = 'Run';
+          toast('Autonomous run complete');
+        }
+      } catch (e) {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = 'Run';
+      }
+    }, 500);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Run';
+  }
+}
+
 function steerDir(dir) {
   moveCmd('/api/move/steer', { angle: dir === 'left' ? -45 : 45 });
 }

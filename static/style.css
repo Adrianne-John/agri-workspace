@@ -198,6 +198,19 @@ input[type=range]::-webkit-slider-thumb {
 }
 .move-status b { color: #90cdf4; }
 
+.auto-run-block {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.auto-run-label { font-size: .8rem; font-weight: 600; color: #a0aec0; }
+.btn-autorun {
+  padding: 10px 28px; border: none; border-radius: 8px;
+  background: #2b6cb0; color: #fff;
+  font-size: .85rem; font-weight: 700; cursor: pointer; transition: all .15s;
+}
+.btn-autorun:hover    { background: #2c5282; }
+.btn-autorun:active   { transform: scale(.96); }
+.btn-autorun:disabled { background: #4a5568; cursor: not-allowed; }
+
 /* Feed wrapper + laser canvas overlay */
 .feed-wrapper {
   position: relative;

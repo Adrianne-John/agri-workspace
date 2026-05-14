@@ -417,6 +417,207 @@ def api_laser():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── Autonomous scan-and-fire constants ───────────────────────────────────────
+AUTO_RUN_SPEED      = 13    # % throttle during the drive phase
+AUTO_RUN_DURATION   = 3.0   # seconds to drive before stopping and scanning
+AUTO_SCAN_LEFT      = 90    # pan angle for left sweep  (positive = left)
+AUTO_SCAN_RIGHT     = -45   # pan angle for right sweep (negative = right)
+AUTO_LASER_DURATION = 4.0   # seconds laser fires per detected target
+AUTO_SCAN_DURATION  = 10.0  # seconds to hold position and scan for targets
+AUTO_TRACK_DURATION = 10.0  # seconds of fine-tracking to align servos before firing
+
+auto_running      = False
+auto_running_lock = threading.Lock()
+
+
+def _blocking_smooth_move(servo, target):
+    """Smooth servo move that blocks the calling thread until complete.
+    Increments the generation counter so any in-flight async smooth_move is
+    preempted immediately."""
+    dev = _servo_device(servo)
+    _smooth_gen[servo] += 1
+    gen     = _smooth_gen[servo]
+    current = state[servo]
+    target_ = max(-90, min(90, int(target)))
+    if current == target_:
+        return
+    step = 1 if target_ > current else -1
+    for a in range(current, target_ + step, step):
+        if _smooth_gen[servo] != gen:
+            return
+        dev.set_pulsewidth_us(_angle_to_us(a))
+        state[servo] = a
+        time.sleep(0.015)
+
+
+def _fire_laser_blocking(duration):
+    with gpio_lock:
+        GPIO.output(LASER_PIN, GPIO.HIGH)
+        state['laser'] = True
+    time.sleep(duration)
+    with gpio_lock:
+        GPIO.output(LASER_PIN, GPIO.LOW)
+        state['laser'] = False
+
+
+def _get_best_target():
+    with detect_lock_dets:
+        weeds = [d for d in latest_dets if d['label'] in _TRACK_LABELS]
+    if not weeds:
+        return None
+    return max(weeds, key=lambda d: d['conf'])
+
+
+def _snap_track_to_target(det):
+    """Blocking: moves camera so the laser box centres on det, then returns."""
+    deg_px_h = _TRACK_FOV_H / _TRACK_W
+    deg_px_v = _TRACK_FOV_V / _TRACK_H
+    with laser_offset_lock:
+        ox, oy = laser_ox, laser_oy
+    target_x = _TRACK_W / 2.0 + ox
+    target_y = _TRACK_H / 2.0 + oy
+    weed_cx  = (det['x1'] + det['x2']) / 2.0
+    weed_cy  = (det['y1'] + det['y2']) / 2.0
+    dx = weed_cx - target_x
+    dy = weed_cy - target_y
+    pan_snap  = max(-90.0, min(90.0, state['servo1'] - dx * deg_px_h))
+    tilt_snap = max(-90.0, min(90.0, state['servo2'] + dy * deg_px_v))
+    _blocking_smooth_move('servo1', int(pan_snap))
+    _blocking_smooth_move('servo2', int(tilt_snap))
+
+
+def _track_for_duration(duration):
+    """Run the same proportional tracking loop as tracking_loop, but blocking,
+    for exactly `duration` seconds.  Continuously steers the camera to keep the
+    laser box centred on the best detected target before the laser fires."""
+    deg_px_h = _TRACK_FOV_H / _TRACK_W
+    deg_px_v = _TRACK_FOV_V / _TRACK_H
+    deadline  = time.time() + duration
+
+    while time.time() < deadline:
+        det = _get_best_target()
+        if not det:
+            time.sleep(0.15)
+            continue
+
+        with laser_offset_lock:
+            ox, oy = laser_ox, laser_oy
+        target_x = _TRACK_W / 2.0 + ox
+        target_y = _TRACK_H / 2.0 + oy
+        weed_cx  = (det['x1'] + det['x2']) / 2.0
+        weed_cy  = (det['y1'] + det['y2']) / 2.0
+        dx = weed_cx - target_x
+        dy = weed_cy - target_y
+
+        if abs(dx) < _TRACK_DEADZONE and abs(dy) < _TRACK_DEADZONE:
+            time.sleep(0.15)
+            continue
+
+        pan_target  = max(-90.0, min(90.0, state['servo1'] - dx * deg_px_h * _TRACK_GAIN))
+        tilt_target = max(-90.0, min(90.0, state['servo2'] + dy * deg_px_v * _TRACK_GAIN))
+        smooth_move('servo1', int(pan_target))
+        smooth_move('servo2', int(tilt_target))
+        time.sleep(DETECT_INTERVAL + 0.1)
+
+
+def _is_on_target():
+    """Return True if the best detection centre is within _TRACK_DEADZONE pixels
+    of the laser box centre — confirms the tracking snap landed correctly."""
+    det = _get_best_target()
+    if not det:
+        return False
+    with laser_offset_lock:
+        ox, oy = laser_ox, laser_oy
+    target_x = _TRACK_W / 2.0 + ox
+    target_y = _TRACK_H / 2.0 + oy
+    dx = abs((det['x1'] + det['x2']) / 2.0 - target_x)
+    dy = abs((det['y1'] + det['y2']) / 2.0 - target_y)
+    return dx <= _TRACK_DEADZONE and dy <= _TRACK_DEADZONE
+
+
+def _scan_and_fire(fired_labels: set) -> bool:
+    """Hold current camera position for AUTO_SCAN_DURATION seconds, then check
+    for the best target.  If found and not already fired this cycle:
+      1. Snap the camera roughly onto the target (one-shot geometric correction)
+      2. Fine-track for AUTO_TRACK_DURATION seconds (iterative proportional loop)
+      3. Fire the laser if YOLO still sees the target after alignment
+    Returns True if the laser was fired."""
+    time.sleep(AUTO_SCAN_DURATION)
+    target = _get_best_target()
+    if not target or target['label'] in fired_labels:
+        return False
+    _snap_track_to_target(target)             # coarse alignment
+    _track_for_duration(AUTO_TRACK_DURATION)  # 10 s fine-tracking
+    # Target was confirmed above; fire unconditionally — do not re-check
+    # _get_best_target() here because detection_loop blanks latest_dets mid-cycle
+    # and the race would silently skip the laser even when perfectly aligned.
+    _fire_laser_blocking(AUTO_LASER_DURATION)
+    fired_labels.add(target['label'])
+    return True
+
+
+def _autonomous_run():
+    global auto_running, auto_track
+
+    with track_lock:
+        saved_track = auto_track
+        auto_track  = False
+
+    try:
+        # ── Phase 1: drive ────────────────────────────────────────────────────
+        agri_move.set_speed(AUTO_RUN_SPEED)
+        agri_move.forward()
+        time.sleep(AUTO_RUN_DURATION)
+        agri_move.stop()
+
+        fired_labels: set = set()   # labels fired this cycle — prevents double-targeting
+
+        # ── Phase 2: scan LEFT (90°) ──────────────────────────────────────────
+        _blocking_smooth_move('servo1', AUTO_SCAN_LEFT)
+        _blocking_smooth_move('servo2', 0)
+        _scan_and_fire(fired_labels)
+
+        # ── Phase 3: scan RIGHT (-45°) ────────────────────────────────────────
+        _blocking_smooth_move('servo1', AUTO_SCAN_RIGHT)
+        _blocking_smooth_move('servo2', 0)
+        _scan_and_fire(fired_labels)
+
+        # ── Phase 4: re-centre camera — cycle complete ────────────────────────
+        _blocking_smooth_move('servo1', 0)
+        _blocking_smooth_move('servo2', 0)
+
+    except Exception as e:
+        print(f"Autonomous run error: {e}")
+        agri_move.stop()
+        with gpio_lock:
+            GPIO.output(LASER_PIN, GPIO.LOW)
+            state['laser'] = False
+
+    finally:
+        with track_lock:
+            auto_track = saved_track
+        with auto_running_lock:
+            auto_running = False
+
+
+@app.route("/api/auto/run", methods=["POST"])
+def api_auto_run():
+    global auto_running
+    with auto_running_lock:
+        if auto_running:
+            return jsonify({"success": False, "error": "already running"}), 409
+        auto_running = True
+    threading.Thread(target=_autonomous_run, daemon=True).start()
+    return jsonify({"success": True, "state": agri_move.get_state()})
+
+
+@app.route("/api/auto/status")
+def api_auto_status():
+    with auto_running_lock:
+        running = auto_running
+    return jsonify({"running": running, "state": agri_move.get_state()})
+
+
 @app.route("/api/track/toggle", methods=["POST"])
 def api_track_toggle():
     global auto_track

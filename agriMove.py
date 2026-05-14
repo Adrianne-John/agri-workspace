@@ -33,7 +33,7 @@ STEER_CENTER_US = 1500   # 0 °  (trim this if the servo doesn't centre perfectl
 STEER_LEFT_US   = 1000   # −90 °
 STEER_RIGHT_US  = 2000   # +90 °
 
-DEFAULT_SPEED = 50  # 0–100 %
+DEFAULT_SPEED = 13  # 0–100 %
 
 
 class _SysfsPWM:
